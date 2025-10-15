@@ -111,6 +111,10 @@ public abstract class AbstractHttp2ConnectionHandlerBuilder<T extends Http2Conne
     private int maxConsecutiveEmptyFrames = 2;
     private int maxRstFramesPerWindow = 200;
     private int secondsPerWindow = 30;
+    private Integer maxEncodedRstFramesPerWindow;
+    private int maxEncodedRstFramesSecondsPerWindow = 30;
+
+    static final int DEFAULT_MAX_RST_FRAMES_PER_CONNECTION_FOR_SERVER = 200;
 
     /**
      * Sets the {@link Http2Settings} to use for the initial connection settings exchange.
@@ -451,6 +455,21 @@ public abstract class AbstractHttp2ConnectionHandlerBuilder<T extends Http2Conne
     }
 
     /**
+     * Sets the maximum number RST frames that are allowed per window before
+     * the connection is closed. This allows to protect against the remote peer that will trigger us to generate a flood
+     * of RST frames and so use up a lot of CPU.
+     *
+     * {@code 0} for any of the parameters means no protection should be applied.
+     */
+    protected B encoderEnforceMaxRstFramesPerWindow(int maxRstFramesPerWindow, int secondsPerWindow) {
+        enforceNonCodecConstraints("encoderEnforceMaxRstFramesPerWindow");
+        this.maxEncodedRstFramesPerWindow = checkPositiveOrZero(
+                maxRstFramesPerWindow, "maxRstFramesPerWindow");
+        this.maxEncodedRstFramesSecondsPerWindow = checkPositiveOrZero(secondsPerWindow, "secondsPerWindow");
+        return self();
+    }
+
+    /**
      * Determine if settings frame should automatically be acknowledged and applied.
      * @return this.
      */
@@ -570,6 +589,21 @@ public abstract class AbstractHttp2ConnectionHandlerBuilder<T extends Http2Conne
 
         if (maxQueuedControlFrames != 0) {
             encoder = new Http2ControlFrameLimitEncoder(encoder, maxQueuedControlFrames);
+        }
+        final int maxEncodedRstFrames;
+        if (maxEncodedRstFramesPerWindow == null) {
+            // Only enable by default on the server.
+            if (isServer()) {
+                maxEncodedRstFrames = DEFAULT_MAX_RST_FRAMES_PER_CONNECTION_FOR_SERVER;
+            } else {
+                maxEncodedRstFrames = 0;
+            }
+        } else {
+            maxEncodedRstFrames = maxEncodedRstFramesPerWindow;
+        }
+        if (maxEncodedRstFrames > 0 && maxEncodedRstFramesSecondsPerWindow > 0) {
+            encoder = new Http2MaxRstFrameLimitEncoder(
+                    encoder, maxEncodedRstFrames, maxEncodedRstFramesSecondsPerWindow);
         }
         if (encoderEnforceMaxConcurrentStreams) {
             if (connection.isServer()) {
